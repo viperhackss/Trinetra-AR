@@ -1,0 +1,396 @@
+<title>Trinetra AR</title>
+<meta name="description" content="Trinetra AR: walk a 3D field area wearing a simulated helmet HUD: compass ring, minimap, drone feed, vision modes, teammate tracking and pings.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: one full-bleed WebGL view with a 2D HUD canvas on top; chrome (settings, help, helmet card) floats in glass panels at the edges. */
+:root {
+  color-scheme: dark;
+  --bg: #090d10;
+  --glass: rgba(12, 18, 22, 0.88);
+  --glass-2: rgba(22, 30, 35, 0.92);
+  --line: rgba(190, 216, 224, 0.16);
+  --line-2: rgba(190, 216, 224, 0.32);
+  --ink: #e4ecee;
+  --muted: #8b9ea5;
+  --ice: #9fd6f2;
+  --cyan: #3fe0e6;
+  --green: #5fe08c;
+  --amber: #ffb547;
+  --red: #ff5d52;
+  --font-ui: "Barlow Semi Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --r: 10px;
+}
+html, body { height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  overflow: hidden;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+#app { position: fixed; inset: 0; overflow: hidden; }
+#gl, #hud { position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: block; }
+html, body { overscroll-behavior: none; }
+#hud { pointer-events: none; }
+button { font: inherit; color: inherit; }
+button:focus-visible, input:focus-visible + .knob, a:focus-visible { outline: 2px solid var(--ice); outline-offset: 2px; }
+kbd {
+  font-family: var(--font-mono); font-size: 11px; line-height: 1;
+  padding: 3px 5px; border-radius: 4px; border: 1px solid var(--line-2);
+  color: var(--ink); background: rgba(255, 255, 255, 0.04); white-space: nowrap;
+}
+
+/* Top bar */
+#topbar {
+  position: absolute; top: 0; left: 0; right: 0;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: calc(10px + env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) 10px max(16px, env(safe-area-inset-left, 0px));
+  pointer-events: none; transition: opacity 0.25s;
+}
+#topbar > * { pointer-events: auto; }
+.brand { display: flex; align-items: center; gap: 8px; letter-spacing: 0.14em; font-weight: 700; font-size: 15px; color: var(--ink); opacity: 0.9; }
+.brand small { font-weight: 500; color: var(--muted); letter-spacing: 0.18em; font-size: 11px; }
+.brand svg { width: 26px; height: 18px; }
+.tb-buttons { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.tb {
+  display: inline-flex; align-items: center; gap: 7px;
+  background: var(--glass); border: 1px solid var(--line); border-radius: 999px;
+  padding: 6px 12px; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; cursor: pointer;
+}
+.tb:hover { border-color: var(--line-2); }
+.tb.icon { padding: 6px 9px; }
+.tb[aria-pressed="true"] { border-color: var(--ice); color: var(--ice); }
+body.locked #topbar { opacity: 0.25; }
+
+/* Lock hint */
+#lockhint {
+  position: absolute; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%);
+  background: var(--glass); border: 1px solid var(--line); border-radius: 999px; padding: 7px 14px;
+  font-size: 13px; color: var(--ink); pointer-events: none; white-space: nowrap; transition: opacity 0.3s;
+}
+
+/* Panels */
+.panel {
+  position: absolute; top: calc(56px + env(safe-area-inset-top, 0px)); right: max(12px, env(safe-area-inset-right, 0px));
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px)); width: min(340px, calc(100% - 24px));
+  background: var(--glass); border: 1px solid var(--line); border-radius: var(--r);
+  display: flex; flex-direction: column; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
+.panel header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 10px; border-bottom: 1px solid var(--line); }
+.panel h2 { margin: 0; font-size: 15px; letter-spacing: 0.12em; text-transform: uppercase; }
+.panel .scroll { overflow-y: auto; padding: 4px 14px 16px; overscroll-behavior: contain; }
+.panel section { padding: 12px 0 6px; border-bottom: 1px solid var(--line); }
+.panel section:last-child { border-bottom: 0; }
+.panel h3 { margin: 0 0 8px; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); font-weight: 600; display: flex; justify-content: space-between; }
+.x { background: none; border: 1px solid var(--line); border-radius: 8px; width: 30px; height: 30px; cursor: pointer; font-size: 18px; line-height: 1; }
+.sw { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 10px; padding: 6px 0; cursor: pointer; font-size: 15px; }
+.sw input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.knob { width: 34px; height: 20px; border-radius: 999px; background: rgba(255, 255, 255, 0.12); position: relative; transition: background 0.2s; }
+.knob::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--ink); transition: transform 0.2s; }
+.sw input:checked + .knob { background: var(--ice); }
+.sw input:checked + .knob::after { transform: translateX(14px); background: #0b1115; }
+.sw .txt small { display: block; color: var(--muted); font-size: 12px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.btn {
+  background: var(--glass-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+  font-size: 13px; font-weight: 600; cursor: pointer; text-align: left; line-height: 1.2;
+}
+.btn:hover { border-color: var(--line-2); }
+.btn small { display: block; font-weight: 400; color: var(--muted); font-size: 11px; margin-top: 2px; }
+#checklist { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+#checklist li { display: grid; grid-template-columns: 18px 1fr; gap: 8px; align-items: start; font-size: 14px; color: var(--muted); }
+#checklist li::before { content: ""; width: 12px; height: 12px; margin-top: 3px; border: 1.5px solid var(--line-2); border-radius: 3px; }
+#checklist li.done { color: var(--ink); }
+#checklist li.done::before { background: var(--green); border-color: var(--green); }
+#ck-count { font-family: var(--font-mono); letter-spacing: 0; color: var(--ink); }
+
+.seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin: 4px 0 10px; }
+.seg button { background: transparent; border: 0; border-right: 1px solid var(--line); padding: 8px 4px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--muted); }
+.seg button:last-child { border-right: 0; }
+.seg button[aria-pressed="true"] { background: var(--ice); color: #0b1115; }
+.seglbl { font-size: 13px; color: var(--muted); margin-top: 4px; }
+#perf { font-family: var(--font-mono); letter-spacing: 0; color: var(--ink); text-transform: none; font-weight: 500; }
+.load { margin: 0 0 16px; }
+.load-bar { height: 4px; background: rgba(255, 255, 255, 0.1); border-radius: 2px; overflow: hidden; }
+.load-bar i { display: block; height: 100%; width: 0; background: var(--ice); transition: width 0.25s; }
+.load span { display: block; margin-top: 6px; font-size: 13px; color: var(--muted); font-family: var(--font-mono); }
+.primary:disabled, .secondary:disabled { opacity: 0.4; cursor: progress; }
+.credits { margin: 8px 0 0; font-size: 11px; color: var(--muted); line-height: 1.5; }
+.credits a { color: var(--muted); }
+
+/* Overlays */
+.overlay {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  padding: calc(16px + env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) calc(16px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+  background: radial-gradient(ellipse at 50% 40%, rgba(9, 13, 16, 0.55), rgba(9, 13, 16, 0.92));
+  overflow-y: auto;
+}
+.card {
+  width: min(720px, 100%); background: var(--glass); border: 1px solid var(--line); border-radius: 14px;
+  padding: clamp(18px, 4vw, 34px); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+}
+.eyebrow { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.2em; color: var(--ice); text-transform: uppercase; }
+.card h1 { margin: 6px 0 4px; font-size: clamp(38px, 8vw, 64px); line-height: 0.95; letter-spacing: 0.02em; font-weight: 700; text-wrap: balance; }
+.card h1 span { color: var(--muted); font-weight: 500; }
+.lede { margin: 10px 0 18px; color: var(--muted); font-size: 17px; line-height: 1.45; max-width: 58ch; }
+.feat { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px 16px; margin: 0 0 20px; padding: 0; list-style: none; }
+.feat li { font-size: 14px; display: flex; gap: 8px; align-items: baseline; }
+.feat li::before { content: ""; width: 7px; height: 7px; flex: 0 0 auto; transform: rotate(45deg) translateY(-1px); background: var(--cyan); }
+.feat li:nth-child(3n+2)::before { background: var(--green); }
+.feat li:nth-child(3n)::before { background: var(--amber); }
+.actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.primary {
+  background: var(--ink); color: #0a0f12; border: 0; border-radius: 999px; padding: 12px 22px;
+  font-size: 16px; font-weight: 700; letter-spacing: 0.06em; cursor: pointer;
+}
+.secondary { background: transparent; border: 1px solid var(--line-2); border-radius: 999px; padding: 11px 18px; font-size: 15px; font-weight: 600; cursor: pointer; }
+.fine { margin: 18px 0 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.keys { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 4px 22px; margin: 4px 0 0; }
+.keys div { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.keys div span:last-child { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.help h2 { margin: 0 0 6px; font-size: 22px; letter-spacing: 0.06em; }
+.help h3 { margin: 16px 0 4px; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); }
+
+/* Helmet view */
+#hbar {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; width: max-content; max-width: calc(100% - 32px);
+}
+#hcard {
+  position: absolute; left: max(16px, env(safe-area-inset-left, 0px)); top: calc(64px + env(safe-area-inset-top, 0px));
+  width: min(300px, calc(100% - 32px)); background: var(--glass); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 14px 16px; pointer-events: none;
+}
+#hcard .eyebrow { color: var(--cyan); }
+#hcard h4 { margin: 4px 0 6px; font-size: 20px; letter-spacing: 0.02em; }
+#hcard p { margin: 0 0 8px; font-size: 14px; line-height: 1.4; color: var(--ink); }
+#hcard dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 13px; }
+#hcard dt { color: var(--muted); }
+#hcard dd { margin: 0; font-family: var(--font-mono); font-size: 12px; }
+
+/* Touch controls */
+#touch { position: absolute; inset: 0; pointer-events: none; }
+#joy {
+  position: absolute; left: max(22px, env(safe-area-inset-left, 0px)); bottom: calc(26px + env(safe-area-inset-bottom, 0px));
+  width: 128px; height: 128px; border-radius: 50%; border: 1px solid var(--line-2); background: rgba(12, 18, 22, 0.35); pointer-events: auto; touch-action: none;
+}
+#joy-knob { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px 0 0 -26px; border-radius: 50%; background: rgba(228, 236, 238, 0.35); border: 1px solid var(--line-2); }
+#tbtns {
+  position: absolute; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+  display: grid; grid-template-columns: repeat(3, 64px); gap: 8px; pointer-events: auto;
+}
+#tbtns button {
+  height: 52px; border-radius: 12px; border: 1px solid var(--line-2); background: rgba(12, 18, 22, 0.55);
+  font-size: 12px; font-weight: 700; letter-spacing: 0.08em; touch-action: none;
+}
+#tbtns button.on { border-color: var(--ice); color: var(--ice); }
+
+#toast {
+  position: absolute; left: 50%; top: calc(60px + env(safe-area-inset-top, 0px)); transform: translateX(-50%);
+  background: var(--glass); border: 1px solid var(--line); border-radius: 999px; padding: 7px 14px; font-size: 14px;
+  opacity: 0; transition: opacity 0.25s; pointer-events: none; white-space: nowrap; max-width: calc(100% - 32px); overflow: hidden; text-overflow: ellipsis;
+}
+#toast.show { opacity: 1; }
+#err { position: absolute; inset: auto 16px 16px 16px; background: #2a1414; border: 1px solid var(--red); border-radius: 8px; padding: 10px 12px; font-family: var(--font-mono); font-size: 12px; white-space: pre-wrap; }
+
+/* Flex mode on foldables: 3D on the top half, a console-style deck on the bottom half */
+#deck { display: none; }
+body.tabletop #touch { background: linear-gradient(180deg, #0b1013, #070a0c); border-top: 1px solid var(--line); }
+body.tabletop #joy { bottom: auto; top: 50%; transform: translateY(-50%); width: 150px; height: 150px; }
+body.tabletop #tbtns { bottom: auto; top: 50%; transform: translateY(-50%); grid-template-columns: repeat(3, 70px); }
+body.tabletop #tbtns button { height: 56px; }
+body.tabletop #deck {
+  display: flex; flex-direction: column; gap: 8px; align-items: center; position: absolute; top: 50%; transform: translateY(-50%);
+  left: calc(max(22px, env(safe-area-inset-left, 0px)) + 164px); right: calc(max(16px, env(safe-area-inset-right, 0px)) + 240px); pointer-events: auto;
+}
+#deck .row { display: flex; gap: 6px; width: 100%; }
+#deck button { flex: 1; height: 44px; border-radius: 10px; border: 1px solid var(--line-2); background: rgba(12, 18, 22, 0.7); font-size: 11px; font-weight: 700; letter-spacing: 0.06em; touch-action: none; }
+#deck button[aria-pressed="true"] { border-color: var(--ice); color: var(--ice); }
+#deck .hint { font-size: 11px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+@media (max-width: 600px) { body.tabletop #deck { left: 16px; right: 16px; top: 12px; transform: none; } body.tabletop #joy, body.tabletop #tbtns { top: auto; bottom: 14px; transform: none; } }
+
+@media (max-width: 560px) {
+  .tb kbd { display: none; }
+  .brand small { display: none; }
+  .tb { padding: 6px 10px; }
+  #tbtns { grid-template-columns: repeat(3, 56px); }
+  #tbtns button { height: 46px; font-size: 11px; }
+  #joy { width: 112px; height: 112px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { transition-duration: 0.01ms !important; }
+}
+</style>
+
+<div id="app">
+  <canvas id="gl" aria-label="3D field view with helmet HUD"></canvas>
+  <canvas id="hud" aria-hidden="true"></canvas>
+
+  <div id="topbar">
+    <div class="brand" aria-label="Trinetra AR">
+      <svg viewBox="0 0 26 18" aria-hidden="true"><path d="M1 7 L10 4 L13 1 L16 4 L25 7 L16 8 L14.5 12 L16.5 17 L13 14 L9.5 17 L11.5 12 L10 8 Z" fill="currentColor"/></svg>
+      <span>TRINETRA</span><small>AR</small>
+    </div>
+    <div class="tb-buttons">
+      <button class="tb" id="btn-field" hidden><span class="lbl">Field</span> <kbd>H</kbd></button>
+      <button class="tb" id="btn-helmet"><span class="lbl">Helmet</span> <kbd>H</kbd></button>
+      <button class="tb icon" id="btn-fs" hidden aria-label="Full screen" title="Full screen"><svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M2 7V2h5M13 2h5v5M18 13v5h-5M7 18H2v-5" fill="none" stroke="currentColor" stroke-width="2"/></svg></button>
+      <button class="tb" id="btn-help"><span class="lbl">Controls</span> <kbd>/</kbd></button>
+      <button class="tb" id="btn-panel" aria-pressed="false"><span class="lbl">Settings</span> <kbd>P</kbd></button>
+    </div>
+  </div>
+
+  <div id="lockhint" hidden>Click the view to look around · <kbd>Esc</kbd> frees the mouse</div>
+
+  <aside id="panel" class="panel" hidden aria-label="Settings">
+    <header><h2>Settings</h2><button class="x" id="panel-close" aria-label="Close settings">×</button></header>
+    <div class="scroll">
+      <section>
+        <h3>Graphics <span id="perf">– fps</span></h3>
+        <div class="seglbl">Quality</div>
+        <div class="seg" id="seg-quality" role="group" aria-label="Quality">
+          <button data-v="low">Low</button><button data-v="medium">Medium</button><button data-v="high">High</button><button data-v="ultra">Ultra</button>
+        </div>
+        <div class="seglbl">Time of day</div>
+        <div class="seg" id="seg-sun" role="group" aria-label="Time of day">
+          <button data-v="golden">Golden hour</button><button data-v="noon">Midday</button><button data-v="night">Night</button>
+        </div>
+        <label class="sw"><span class="txt">Auto resolution<small>Holds about 60 fps; the HUD stays sharp</small></span><input type="checkbox" id="set-autoRes"><span class="knob"></span><kbd>&nbsp;</kbd></label>
+      </section>
+      <section>
+        <h3>View</h3>
+        <label class="sw"><span class="txt">Night</span><input type="checkbox" id="set-night"><span class="knob"></span><kbd>N</kbd></label>
+        <label class="sw"><span class="txt">Real glasses field of view<small>50° × 29° display area</small></span><input type="checkbox" id="set-glassesFov"><span class="knob"></span><kbd>G</kbd></label>
+        <label class="sw"><span class="txt">Stereo 3D<small>Side by side, for phone VR viewers</small></span><input type="checkbox" id="set-stereo"><span class="knob"></span><kbd>V</kbd></label>
+        <label class="sw"><span class="txt">Sound<small>Alert tones, wind, footsteps, drone</small></span><input type="checkbox" id="set-sound"><span class="knob"></span><kbd>&nbsp;</kbd></label>
+        <label class="sw"><span class="txt">Motion look<small>Turn the phone to look around</small></span><input type="checkbox" id="set-motionLook"><span class="knob"></span><kbd>&nbsp;</kbd></label>
+        <label class="sw"><span class="txt">Haptics<small>Vibration for alerts and pings</small></span><input type="checkbox" id="set-haptics"><span class="knob"></span><kbd>&nbsp;</kbd></label>
+        <label class="sw"><span class="txt">Flex mode layout<small>Half-folded phone: view on top, controls below</small></span><input type="checkbox" id="set-foldLayout"><span class="knob"></span><kbd>&nbsp;</kbd></label>
+        <label class="sw"><span class="txt">Drone altitude in feet</span><input type="checkbox" id="set-imperial"><span class="knob"></span><kbd>&nbsp;</kbd></label>
+      </section>
+      <section>
+        <h3>Sensors</h3>
+        <label class="sw"><span class="txt">6DOF tracking<small>Off = world markers hidden</small></span><input type="checkbox" id="set-sixdof"><span class="knob"></span><kbd>&nbsp;</kbd></label>
+        <label class="sw"><span class="txt">Team mesh<small>Off = radio silence</small></span><input type="checkbox" id="set-mesh"><span class="knob"></span><kbd>&nbsp;</kbd></label>
+        <label class="sw"><span class="txt">RTK GNSS<small>On = centimetre positions</small></span><input type="checkbox" id="set-rtk"><span class="knob"></span><kbd>&nbsp;</kbd></label>
+        <label class="sw"><span class="txt">Mirror on rear movement</span><input type="checkbox" id="set-mirrorAuto"><span class="knob"></span><kbd>&nbsp;</kbd></label>
+        <label class="sw"><span class="txt">Pings</span><input type="checkbox" id="set-ping"><span class="knob"></span><kbd>&nbsp;</kbd></label>
+      </section>
+      <section>
+        <h3>Scenario</h3>
+        <div class="grid2">
+          <button class="btn" data-trig="behind">Teammate behind you<small>Rear radar + mirror</small></button>
+          <button class="btn" data-trig="rf">RF activity<small>Info alert</small></button>
+          <button class="btn" data-trig="link">Cut drone link<small>15 s outage</small></button>
+          <button class="btn" data-trig="mateping">Teammate ping<small>Synced marker</small></button>
+          <button class="btn" data-trig="battery">Drain battery<small>Warning, then critical</small></button>
+          <button class="btn" data-trig="reset">Reset position<small>Back to start</small></button>
+        </div>
+      </section>
+      <section>
+        <h3>Checklist <span id="ck-count">0/13</span></h3>
+        <ol id="checklist"></ol>
+      </section>
+    </div>
+  </aside>
+
+  <div id="help" class="overlay" hidden>
+    <div class="card help" role="dialog" aria-modal="true" aria-labelledby="help-title">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+        <h2 id="help-title">Controls</h2><button class="x" id="help-close" aria-label="Close controls">×</button>
+      </div>
+      <h3>Move and look</h3>
+      <div class="keys">
+        <div><span>Look</span><span>Mouse · drag on touch</span></div>
+        <div><span>Move</span><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span></div>
+        <div><span>Run</span><span><kbd>Shift</kbd></span></div>
+        <div><span>Crouch / prone</span><span><kbd>C</kbd><kbd>Z</kbd></span></div>
+      </div>
+      <h3>HUD</h3>
+      <div class="keys">
+        <div><span>Vision and sensor menu</span><span>hold <kbd>Q</kbd></span></div>
+        <div><span>Ping (hold for types)</span><span><kbd>E</kbd></span></div>
+        <div><span>Map ping</span><span>hold <kbd>M</kbd> + click</span></div>
+        <div><span>Remove your ping</span><span><kbd>X</kbd></span></div>
+        <div><span>Rearview mirror</span><span><kbd>R</kbd></span></div>
+        <div><span>Acknowledge alert</span><span><kbd>Space</kbd></span></div>
+        <div><span>Minimap range</span><span>wheel · <kbd>-</kbd><kbd>=</kbd></span></div>
+      </div>
+      <h3>View</h3>
+      <div class="keys">
+        <div><span>Night</span><span><kbd>N</kbd></span></div>
+        <div><span>Real glasses field of view</span><span><kbd>G</kbd></span></div>
+        <div><span>Stereo 3D</span><span><kbd>V</kbd></span></div>
+        <div><span>Helmet view</span><span><kbd>H</kbd></span></div>
+        <div><span>Settings</span><span><kbd>P</kbd></span></div>
+        <div><span>Free the mouse</span><span><kbd>Esc</kbd></span></div>
+      </div>
+      <h3>Phones and foldables</h3>
+      <div class="keys">
+        <div><span>Look by turning the phone</span><span>Settings · Motion look</span></div>
+        <div><span>Run</span><span>Push the stick fully forward</span></div>
+        <div><span>Flex mode (half-folded)</span><span>View on top, controls below</span></div>
+        <div><span>Full screen</span><span>Corner-arrows button</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="start" class="overlay">
+    <div class="card">
+      <div class="eyebrow">Helmet HUD simulator · simulated data</div>
+      <h1>Trinetra <span>AR</span></h1>
+      <p class="lede">Walk a field compound wearing a see-through helmet display. Everything from the build spec runs live, so you can learn the HUD before you solder anything.</p>
+      <ul class="feat">
+        <li>3D compass ring</li><li>Heading-up minimap</li><li>Drone day / IR feed</li>
+        <li>Rearview mirror</li><li>5 vision modes</li><li>Radial menu</li>
+        <li>Teammates through walls</li><li>Team pings</li><li>Alert queue</li>
+        <li>Exploded helmet</li><li>Stereo 3D view</li><li>Glasses field of view</li>
+      </ul>
+      <div class="load" id="load"><div class="load-bar"><i id="load-fill"></i></div><span id="load-txt">Loading sky, terrain and teammates… 0%</span></div>
+      <div class="actions">
+        <button class="primary" id="go" disabled>Start in the field</button>
+        <button class="secondary" id="go-helmet" disabled>See the helmet first</button>
+      </div>
+      <p class="fine">Use headphones at low volume; alert tones play without warning. Teammates, the drone and every reading are simulated. The simulator has no weapons, no opponents and no targeting.</p>
+      <p class="credits">Night sky: Poly Haven (CC0). Grass texture: OpenGameArt (CC-BY 3.0). Teammate character: Mixamo, from the three.js examples (recoloured). Day sky: Preetham sky model. 3D engine: three.js (MIT).</p>
+    </div>
+  </div>
+
+  <div id="hcard" hidden>
+    <div class="eyebrow" id="hc-tag">Part</div>
+    <h4 id="hc-name">Helmet</h4>
+    <p id="hc-role"></p>
+    <dl><dt>Spec</dt><dd id="hc-spec"></dd><dt>Price</dt><dd id="hc-price"></dd></dl>
+  </div>
+  <div id="hbar" hidden>
+    <button class="tb" id="hb-explode" aria-pressed="false">Explode</button>
+    <button class="tb" id="hb-labels" aria-pressed="true">Labels</button>
+    <button class="tb" id="hb-spin" aria-pressed="true">Auto-turn</button>
+    <button class="tb" id="hb-back">Back to field <kbd>H</kbd></button>
+  </div>
+
+  <div id="touch" hidden>
+    <div id="joy" aria-label="Move"><div id="joy-knob"></div></div>
+    <div id="tbtns">
+      <button data-k="menu">MENU</button>
+      <button data-k="ping">PING</button>
+      <button data-k="map">MAP</button>
+      <button data-k="mirror">MIRROR</button>
+      <button data-k="ack">ACK</button>
+      <button data-k="crouch">CROUCH</button>
+    </div>
+    <div id="deck" aria-label="Flex mode controls">
+      <div class="hint">Vision</div>
+      <div class="row"><button data-v="clear">CLR</button><button data-v="lowlight">LOW</button><button data-v="thermal">THM</button><button data-v="fused">FUS</button><button data-v="outline">OUT</button></div>
+      <div class="row"><button data-d="night">NIGHT</button><button data-d="prone">PRONE</button><button data-d="map">RANGE</button></div>
+    </div>
+  </div>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+</div>
